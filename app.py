@@ -15,7 +15,7 @@ app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
 
-GROQ_API_KEY = ""
+GROQ_API_KEY = "your groq api key"
 if not GROQ_API_KEY:
     print("⚠️  Warning: GROQ_API_KEY not set — set it with:")
     print("   set GROQ_API_KEY=your_key_here (Windows)")
