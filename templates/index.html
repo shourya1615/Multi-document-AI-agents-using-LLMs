@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Multi-Agent Document Chat</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background: #e148069e;
+        padding: 24px;
+      }
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+      }
+      .card {
+        background: white;
+        padding: 14px;
+        border-radius: 10px;
+        box-shadow: 0 6px 18px rgba(10, 20, 40, 0.06);
+        margin-bottom: 12px;
+      }
+      .agent-buttons {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .agent-btn {
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid #080000;
+        cursor: pointer;
+        background: #07961f;
+      }
+      .agent-btn.active {
+        background: #065bc9;
+        border-color: #c01b10;
+      }
+      .muted {
+        color: #666;
+        font-size: 0.9rem;
+      }
+      .chat-box {
+        height: 420px;
+        overflow-y: auto;
+        background: #fbfcfe;
+        padding: 12px;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .msg {
+        max-width: 78%;
+        padding: 10px 12px;
+        border-radius: 10px;
+      }
+      .msg.user {
+        align-self: flex-end;s
+        background: #dbeafe;
+        color: #08306b;
+      }
+      .msg.ai {
+        align-self: flex-start;
+        background: #efefef;
+        color: #111;
+      }
+      .msg.system {
+        align-self: center;
+        color: #666;
+        background: transparent;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      input[type="text"] {
+        flex: 1;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid #ddd;
+      }
+      button {
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: none;
+        background: #2563eb;
+        color: white;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #6b7280;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Multi-Agent Document Chat</h1>
+
+      <div class="card">
+        <label class="muted"
+          >Upload a file (.txt .pdf .docx) — required for Summarizer</label
+        >
+        <div class="row">
+          <input type="file" id="fileInput" accept=".txt,.pdf,.docx" />
+          <button id="uploadBtn">Upload</button>
+          <button id="clearBtn" class="secondary">Clear Session</button>
+        </div>
+        <div id="uploadStatus" class="muted"></div>
+      </div>
+
+      <div class="card">
+        <label class="muted">Agents</label>
+        <div id="agentButtons" class="agent-buttons"></div>
+        <div id="selectedAgent" class="muted">No agent selected</div>
+      </div>
+
+      <div class="card">
+        <div id="chatBox" class="chat-box">
+          <div class="msg system">
+            Upload a file (for Summarizer) and pick an agent to begin.
+          </div>
+        </div>
+
+        <form id="chatForm" style="display: flex; margin-top: 10px">
+          <input
+            id="messageInput"
+            type="text"
+            placeholder="Ask the agent..."
+            autocomplete="off"
+          />
+          <button id="sendBtn" type="submit">Send</button>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      // Agents injected by Flask
+      const AGENTS = {{ agents | tojson }};
+      let currentAgent = null;
+
+      // Render agent buttons
+      const agentButtonsDiv = document.getElementById('agentButtons');
+      for (const key in AGENTS) {
+        const btn = document.createElement('button');
+        btn.className = 'agent-btn';
+        btn.textContent = AGENTS[key].name;
+        btn.dataset.agent = key;
+        btn.onclick = () => selectAgent(key, btn);
+        agentButtonsDiv.appendChild(btn);
+      }
+
+      function selectAgent(key, btnEl) {
+        currentAgent = key;
+        document.querySelectorAll('.agent-btn').forEach(b => b.classList.remove('active'));
+        btnEl.classList.add('active');
+        document.getElementById('selectedAgent').textContent = `Selected: ${AGENTS[key].name}`;
+        // if summarizer selected but no file, show hint
+        checkStatusAndNotify();
+        // clear chat UI for clarity when switching agent
+        // (we keep session server-side history)
+        // document.getElementById('chatBox').innerHTML = '';
+      }
+
+      async function checkStatusAndNotify() {
+        const res = await fetch('/status');
+        const data = await res.json();
+        const uploaded = data.file_uploaded;
+        document.getElementById('uploadStatus').textContent = uploaded ? `Document uploaded — ${data.doc_length} chars` : 'No document uploaded';
+        // disable summarizer if no file
+        const summarizerBtns = Array.from(document.querySelectorAll('.agent-btn')).filter(b => b.dataset.agent === 'summarizer');
+        summarizerBtns.forEach(b => b.disabled = !uploaded);
+        // If current agent is summarizer but no file, warn
+        if (currentAgent === 'summarizer' && !uploaded) {
+          appendSystem("Summarizer requires an uploaded document. Please upload a file first.");
+        }
+      }
+
+      // file upload
+      document.getElementById('uploadBtn').addEventListener('click', async () => {
+        const fi = document.getElementById('fileInput');
+        if (!fi.files.length) {
+          alert('Choose a file first');
+          return;
+        }
+        const fd = new FormData();
+        fd.append('file', fi.files[0]);
+        document.getElementById('uploadStatus').textContent = 'Uploading...';
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.error) {
+          document.getElementById('uploadStatus').textContent = 'Error: ' + data.error;
+        } else {
+          document.getElementById('uploadStatus').textContent = `Uploaded — ${data.chars} chars`;
+          appendSystem('File uploaded successfully. You can now use the Summarizer or other agents.');
+          // enable summarizer button now
+          document.querySelectorAll('.agent-btn').forEach(b => { if (b.dataset.agent === 'summarizer') b.disabled = false; });
+        }
+      });
+
+      // clear session
+      document.getElementById('clearBtn').addEventListener('click', async () => {
+        await fetch('/clear', { method: 'POST' });
+        document.getElementById('uploadStatus').textContent = 'Session cleared';
+        appendSystem('Session cleared. Upload a new file to use the Summarizer.');
+        checkStatusAndNotify();
+      });
+
+      // send message
+      document.getElementById('chatForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = document.getElementById('messageInput').value.trim();
+        if (!text) return;
+        if (!currentAgent) { alert('Select an agent first'); return; }
+
+        appendUser(text);
+        document.getElementById('messageInput').value = '';
+
+        // fast local check for summarizer + no file to avoid calling server
+        const status = await (await fetch('/status')).json();
+        if (currentAgent === 'summarizer' && !status.file_uploaded) {
+          appendSystem('Summarizer requires an uploaded file — please upload before asking to summarize.');
+          return;
+        }
+
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ agent: currentAgent, message: text })
+        });
+        const data = await res.json();
+        if (data.error) {
+          appendSystem('Error: ' + data.error);
+        } else {
+          appendAI(data.answer || data.answer === "" ? data.answer : data.answer);
+        }
+      });
+
+      function appendUser(text) {
+        const d = document.createElement('div');
+        d.className = 'msg user';
+        d.textContent = text;
+        document.getElementById('chatBox').appendChild(d);
+        scrollChat();
+      }
+
+      function appendAI(text) {
+        const d = document.createElement('div');
+        d.className = 'msg ai';
+        d.textContent = text;
+        document.getElementById('chatBox').appendChild(d);
+        scrollChat();
+      }
+
+      function appendSystem(text) {
+        const d = document.createElement('div');
+        d.className = 'msg system';
+        d.textContent = text;
+        document.getElementById('chatBox').appendChild(d);
+        scrollChat();
+      }
+
+      function scrollChat() {
+        const box = document.getElementById('chatBox');
+        box.scrollTop = box.scrollHeight;
+      }
+
+      // init: check status to disable summarizer if needed
+      window.addEventListener('load', () => {
+        checkStatusAndNotify();
+      });
+    </script>
+  </body>
+</html>
